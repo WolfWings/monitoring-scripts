@@ -81,19 +81,29 @@ function print_drive {
 
 declare -A SERIAL
 declare -A SMART
+declare -A SKIP
 
+# echo 'Scanning drives.'
 # First gather all the statistics in parallel
 for DRIVE in /dev/sd?; do
+	# echo -n "Drive ${DRIVE#/dev/}: "
+	if readlink /sys/block/${DRIVE#/dev/} | grep -q usb; then
+		SKIP[${DRIVE}]='USB'
+		# echo 'USB, skipping!'
+		continue
+	fi
+	# echo "Scanning..."
 	SERIAL[${DRIVE}]=$(echo \
-		$(hdparm -i ${DRIVE} \
+		$(/sbin/hdparm -i ${DRIVE} \
 		| awk '/SerialNo=/ { split($0, a, "SerialNo="); print a[2]; }'\
 		) \
 	&)
-	SMART[${DRIVE}]=$(echo "$(smartctl -f brief -A ${DRIVE} | awk "${DEATHSAWK}")" &)
+	SMART[${DRIVE}]=$(echo "$(/usr/sbin/smartctl -f brief -A ${DRIVE} | awk "${DEATHSAWK}")" &)
 done
 
-# Now wait for all the smartctl, hdparm, and awks to finish...
+# echo -n "Waiting for drive scans to finish..."
 wait
+# echo "Done!"
 
 # And finally we generate the e-mail.
 BODY=$(
@@ -101,6 +111,8 @@ BODY=$(
 	echo '<html><head><title></title></head><body>'
 	echo ${DRIVESHEADER}
 	for DRIVE in /dev/sd?; do
+		# Skip if drive was skipped before.
+		[ ${SKIP[${DRIVE}]+exists} ] && continue
 		print_drive ${SERIAL[${DRIVE}]} "${SMART[${DRIVE}]}"
 	done
 	echo '</body></html>'
@@ -108,7 +120,7 @@ BODY=$(
 
 echo "${BODY}" | mail \
 -a "From: ${EMAIL[FROM]}" \
--a "MIME-Version: 1.0" \
--a "Content-Type: text/html" \
+-a 'MIME-Version: 1.0' \
+-a 'Content-Type: text/html' \
 -s "Subject: ${EMAIL[SUBJECT]}" \
 "${EMAIL[TO]}"
